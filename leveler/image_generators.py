@@ -436,75 +436,6 @@ class ImageGenerators(MixinMeta):
         text_u_fnt = ImageFont.truetype(font_unicode_file, 14)
         symbol_u_fnt = ImageFont.truetype(font_unicode_file, 17)
 
-        def _write_unicode(
-            text: Union[str, None],
-            text_type: Union[str, None],
-            x: int,
-            y: int,
-            font: ImageFont.FreeTypeFont,
-            unicode_font: ImageFont.FreeTypeFont,
-            fill: tuple,
-        ):
-            """
-            Write a Latin character from the provided font or try a Unicode font fallback.
-            Also attempts to reshape right-to-left text for appropriate display in Pillow.
-
-            text: the string to draw on the Image
-            text_type: string, one of "name", "title", "info" or None
-            x: x position value (horizontal)
-            y: y position value (vertical)
-            font: loaded Latin character font object
-            unicode_font: loaded Unicode character font object
-            fill: RGBA 4-tup for font fill color
-            """
-            if not text:
-                pass
-
-            # Unicode font baseline adjustment and stroke width to mock bold font weights
-            if text_type == "name":
-                unicode_stroke_width = 1
-                unicode_vertical_offset = 12
-            elif text_type == "title":
-                unicode_stroke_width = 1
-                unicode_vertical_offset = 7
-            else:
-                unicode_stroke_width = 0
-                unicode_vertical_offset = 0
-
-            # use bidi to determine if the text needs to be reversed and font glyphs combined
-            reshaped_text = arabic_reshaper.reshape(text)
-            bidi_text = get_display(reshaped_text)
-            # if the text has been reshaped, use the Unicode font for display
-            # and place all text at once
-            if bidi_text != text:
-                draw.text(
-                    (x, (y - unicode_vertical_offset)),
-                    bidi_text,
-                    font=unicode_font,
-                    fill=fill,
-                    stroke_width=unicode_stroke_width,
-                    stroke_fill=fill,
-                )
-            # otherwise, determine per-character which font to use, Latin or Unicode
-            # and place per-character
-            else:
-                check_font = TTFont(font.path)
-                for char in text:
-                    if self.char_in_font(char, check_font):
-                        draw.text((x, y), char, font=font, fill=fill)
-                        x += self._get_character_pixel_width(font, char)
-                    else:
-                        draw.text(
-                            (x, (y - unicode_vertical_offset)),
-                            char,
-                            font=unicode_font,
-                            fill=fill,
-                            stroke_width=unicode_stroke_width,
-                            stroke_fill=fill,
-                        )
-                        x += self._get_character_pixel_width(unicode_font, char)
-                check_font.close()
-
         # COLORS
         white_color = (240, 240, 240, 255)
         if "rep_color" not in userinfo.keys() or not userinfo["rep_color"]:
@@ -608,7 +539,7 @@ class ImageGenerators(MixinMeta):
         head_align = 140
         # determine info text color
         info_text_color = self._contrast(info_fill, white_color, dark_color)
-        _write_unicode(
+        self._write_unicode(
             (self._truncate_text(user.name, 22)).upper(),
             "name",
             head_align,
@@ -616,8 +547,9 @@ class ImageGenerators(MixinMeta):
             name_fnt,
             name_u_fnt,
             info_text_color,
+            draw,
         )  # NAME
-        _write_unicode(
+        self._write_unicode(
             userinfo["title"].upper(),
             "title",
             head_align,
@@ -625,6 +557,7 @@ class ImageGenerators(MixinMeta):
             title_fnt,
             title_u_fnt,
             info_text_color,
+            draw,
         )  # TITLE
 
         # draw divider
@@ -729,7 +662,9 @@ class ImageGenerators(MixinMeta):
         for line in textwrap.wrap(userinfo["info"], width=27):
             # for line in textwrap.wrap('userinfo["info"]', width=200):
             # draw.text((margin, offset), line, font=text_fnt, fill=white_color)
-            _write_unicode(line, "info", margin, offset, text_fnt, text_u_fnt, txt_color)
+            self._write_unicode(
+                line, "info", margin, offset, text_fnt, text_u_fnt, txt_color, draw
+            )
             offset += 18
 
         # if await self.config.badge_type() == "circles":
@@ -973,3 +908,79 @@ class ImageGenerators(MixinMeta):
             badges_images,
         )
         return file
+
+    def _write_unicode(
+        self,
+        text: Union[str, None],
+        text_type: Union[str, None],
+        x: int,
+        y: int,
+        font: ImageFont.FreeTypeFont,
+        unicode_font: ImageFont.FreeTypeFont,
+        fill: tuple,
+        draw: ImageDraw.ImageDraw,
+    ):
+        """
+        Write a Latin character from the provided font or try a Unicode font fallback.
+        Also attempts to reshape right-to-left text for appropriate display in Pillow.
+
+        text: the string to draw on the Image
+        text_type: string, one of "name", "title", "info" or None
+        x: x position value (horizontal)
+        y: y position value (vertical)
+        font: loaded Latin character font object
+        unicode_font: loaded Unicode character font object
+        fill: RGBA 4-tup for font fill color
+        draw: the ImageDraw.ImageDraw instance
+        """
+        if not text:
+            pass
+
+        # Unicode font baseline adjustment and stroke width to mock bold font weights
+        if text_type == "name":
+            unicode_stroke_width = 1
+            unicode_vertical_offset = 12
+        elif text_type == "title":
+            unicode_stroke_width = 1
+            unicode_vertical_offset = 7
+        elif text_type == "info":
+            unicode_stroke_width = 0
+            unicode_vertical_offset = 1
+        else:
+            unicode_stroke_width = 0
+            unicode_vertical_offset = 0
+
+        # use bidi to determine if the text needs to be reversed and font glyphs combined
+        reshaped_text = arabic_reshaper.reshape(text)
+        bidi_text = get_display(reshaped_text)
+        # if the text has been reshaped, use the Unicode font for display
+        # and place all text at once
+        if bidi_text != text:
+            draw.text(
+                (x, (y - unicode_vertical_offset)),
+                bidi_text,
+                font=unicode_font,
+                fill=fill,
+                stroke_width=unicode_stroke_width,
+                stroke_fill=fill,
+            )
+        # otherwise, determine per-character which font to use, Latin or Unicode
+        # and place per-character
+        else:
+            check_font = TTFont(font.path)
+            for char in text:
+                if self.char_in_font(char, check_font):
+                    draw.text((x, y), char, font=font, fill=fill)
+                    x += self._get_character_pixel_width(font, char)
+                else:
+                    print(char)
+                    draw.text(
+                        (x, (y - unicode_vertical_offset)),
+                        char,
+                        font=unicode_font,
+                        fill=fill,
+                        stroke_width=unicode_stroke_width,
+                        stroke_fill=fill,
+                    )
+                    x += self._get_character_pixel_width(unicode_font, char)
+            check_font.close()
