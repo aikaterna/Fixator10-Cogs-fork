@@ -2,7 +2,10 @@ import operator
 import textwrap
 from io import BytesIO
 from logging import getLogger
+from typing import Union
 
+import arabic_reshaper
+from bidi.algorithm import get_display
 import discord
 from fontTools.ttLib import TTFont
 from redbot.core import bank
@@ -74,20 +77,6 @@ class ImageGenerators(MixinMeta):
         profile_image_original.close()
         rank_background.close()
         rank_avatar.close()
-
-        def _write_unicode(text, init_x, y, font, unicode_font, fill):
-            write_pos = init_x
-            check_font = TTFont(font.path)
-
-            for char in text:
-                # if char.isalnum() or char in string.punctuation or char in string.whitespace:
-                if self.char_in_font(char, check_font):
-                    draw.text((write_pos, y), "{}".format(char), font=font, fill=fill)
-                    write_pos += self._get_character_pixel_width(font, char)
-                else:
-                    draw.text((write_pos, y), "{}".format(char), font=unicode_font, fill=fill)
-                    write_pos += self._get_character_pixel_width(unicode_font, char)
-            check_font.close()
 
         # set canvas
         width = 390
@@ -433,34 +422,88 @@ class ImageGenerators(MixinMeta):
         font_heavy_file = f"{bundled_data_path(self)}/Uni_Sans_Heavy.ttf"
         font_file = f"{bundled_data_path(self)}/Ubuntu-R_0.ttf"
         font_bold_file = f"{bundled_data_path(self)}/Ubuntu-B_0.ttf"
-        font_unicode_file = f"{bundled_data_path(self)}/unicode.ttf"
+        font_unicode_file = f"{bundled_data_path(self)}/GoNotoCurrent.ttf"
 
         name_fnt = ImageFont.truetype(font_heavy_file, 30)
-        name_u_fnt = ImageFont.truetype(font_unicode_file, 30)
+        name_u_fnt = ImageFont.truetype(font_unicode_file, 28)
         title_fnt = ImageFont.truetype(font_heavy_file, 22)
-        title_u_fnt = ImageFont.truetype(font_unicode_file, 23)
+        title_u_fnt = ImageFont.truetype(font_unicode_file, 20)
         label_fnt = ImageFont.truetype(font_bold_file, 18)
         exp_fnt = ImageFont.truetype(font_bold_file, 13)
         large_fnt = ImageFont.truetype(font_thin_file, 33)
         rep_fnt = ImageFont.truetype(font_heavy_file, 26)
-        rep_u_fnt = ImageFont.truetype(font_unicode_file, 30)
         text_fnt = ImageFont.truetype(font_file, 14)
         text_u_fnt = ImageFont.truetype(font_unicode_file, 14)
-        symbol_u_fnt = ImageFont.truetype(font_unicode_file, 15)
+        symbol_u_fnt = ImageFont.truetype(font_unicode_file, 17)
 
-        def _write_unicode(text, init_x, y, font, unicode_font, fill):
-            write_pos = init_x
-            check_font = TTFont(font.path)
+        def _write_unicode(
+            text: Union[str, None],
+            text_type: Union[str, None],
+            x: int,
+            y: int,
+            font: ImageFont.FreeTypeFont,
+            unicode_font: ImageFont.FreeTypeFont,
+            fill: tuple,
+        ):
+            """
+            Write a Latin character from the provided font or try a Unicode font fallback.
+            Also attempts to reshape right-to-left text for appropriate display in Pillow.
 
-            for char in text:
-                # if char.isalnum() or char in string.punctuation or char in string.whitespace:
-                if self.char_in_font(char, check_font):
-                    draw.text((write_pos, y), "{}".format(char), font=font, fill=fill)
-                    write_pos += self._get_character_pixel_width(font, char)
-                else:
-                    draw.text((write_pos, y), "{}".format(char), font=unicode_font, fill=fill)
-                    write_pos += self._get_character_pixel_width(unicode_font, char)
-            check_font.close()
+            text: the string to draw on the Image
+            text_type: string, one of "name", "title", "info" or None
+            x: x position value (horizontal)
+            y: y position value (vertical)
+            font: loaded Latin character font object
+            unicode_font: loaded Unicode character font object
+            fill: RGBA 4-tup for font fill color
+            """
+            if not text:
+                pass
+
+            # Unicode font baseline adjustment and stroke width to mock bold font weights
+            if text_type == "name":
+                unicode_stroke_width = 1
+                unicode_vertical_offset = 12
+            elif text_type == "title":
+                unicode_stroke_width = 1
+                unicode_vertical_offset = 7
+            else:
+                unicode_stroke_width = 0
+                unicode_vertical_offset = 0
+
+            # use bidi to determine if the text needs to be reversed and font glyphs combined
+            reshaped_text = arabic_reshaper.reshape(text)
+            bidi_text = get_display(reshaped_text)
+            # if the text has been reshaped, use the Unicode font for display
+            # and place all text at once
+            if bidi_text != text:
+                draw.text(
+                    (x, (y - unicode_vertical_offset)),
+                    bidi_text,
+                    font=unicode_font,
+                    fill=fill,
+                    stroke_width=unicode_stroke_width,
+                    stroke_fill=fill,
+                )
+            # otherwise, determine per-character which font to use, Latin or Unicode
+            # and place per-character
+            else:
+                check_font = TTFont(font.path)
+                for char in text:
+                    if self.char_in_font(char, check_font):
+                        draw.text((x, y), char, font=font, fill=fill)
+                        x += self._get_character_pixel_width(font, char)
+                    else:
+                        draw.text(
+                            (x, (y - unicode_vertical_offset)),
+                            char,
+                            font=unicode_font,
+                            fill=fill,
+                            stroke_width=unicode_stroke_width,
+                            stroke_fill=fill,
+                        )
+                        x += self._get_character_pixel_width(unicode_font, char)
+                check_font.close()
 
         # COLORS
         white_color = (240, 240, 240, 255)
@@ -567,6 +610,7 @@ class ImageGenerators(MixinMeta):
         info_text_color = self._contrast(info_fill, white_color, dark_color)
         _write_unicode(
             (self._truncate_text(user.name, 22)).upper(),
+            "name",
             head_align,
             142,
             name_fnt,
@@ -575,12 +619,13 @@ class ImageGenerators(MixinMeta):
         )  # NAME
         _write_unicode(
             userinfo["title"].upper(),
+            "title",
             head_align,
             170,
             title_fnt,
             title_u_fnt,
             info_text_color,
-        )
+        )  # TITLE
 
         # draw divider
         draw.rectangle([(0, 323), (340, 324)], fill=(0, 0, 0, 255))  # box
@@ -591,16 +636,15 @@ class ImageGenerators(MixinMeta):
 
         # rep_text = "{} REP".format(userinfo["rep"])
         rep_text = "{}".format(self._humanize_number(userinfo["rep"]))
-        _write_unicode("\N{HEAVY BLACK HEART}", 257, 9, rep_fnt, rep_u_fnt, rep_fill)
+        draw.text((257, 0), "\N{HEAVY BLACK HEART}", font=name_u_fnt, fill=rep_fill)  # Rep heart
         draw.text(
             (self._center(278, 340, rep_text, rep_fnt), 10),
             rep_text,
             font=rep_fnt,
             fill=rep_fill,
-        )  # Exp Text
+        )  # Rep count text
 
         balance_width = 85
-
         credits_name = (
             credits_name.upper()
             if label_fnt.getmask(credits_name.upper()).getbbox()[2] <= balance_width
@@ -613,33 +657,24 @@ class ImageGenerators(MixinMeta):
             "    RANK",
             font=label_fnt,
             fill=info_text_color,
-        )  # Rank
+        )  # Rank label text
         draw.text(
             (self._center(0, 340, "    LEVEL", label_fnt), label_align),
             "    LEVEL",
             font=label_fnt,
             fill=info_text_color,
-        )  # Exp
+        )  # Level label text
         draw.text(
             (self._center(200, 340, credits_name, label_fnt), label_align),
             credits_name,
             font=label_fnt,
             fill=info_text_color,
-        )  # Credits
+        )  # Credits label text
 
         global_symbol = "\N{EARTH GLOBE AMERICAS} "
-
-        _write_unicode(
-            global_symbol, 36, label_align + 5, label_fnt, symbol_u_fnt, info_text_color
-        )  # Symbol
-        _write_unicode(
-            global_symbol,
-            134,
-            label_align + 5,
-            label_fnt,
-            symbol_u_fnt,
-            info_text_color,
-        )  # Symbol
+        draw.text((36, label_align), global_symbol, font=symbol_u_fnt, fill=info_text_color)
+        draw.text((134, label_align), global_symbol, font=symbol_u_fnt, fill=info_text_color)
+        # Globe symbols
 
         # userinfo
         global_rank = "#{}".format(self._humanize_number(global_rank))
@@ -649,13 +684,13 @@ class ImageGenerators(MixinMeta):
             global_rank,
             font=large_fnt,
             fill=info_text_color,
-        )  # Rank
+        )  # Rank number
         draw.text(
             (self._center(0, 340, global_level, large_fnt), label_align - 27),
             global_level,
             font=large_fnt,
             fill=info_text_color,
-        )  # Exp
+        )  # Level number
         # draw level bar
         exp_font_color = self._contrast(exp_fill, light_color, dark_color)
         exp_frac = int(userinfo["total_exp"] - level_exp)
@@ -664,18 +699,18 @@ class ImageGenerators(MixinMeta):
         draw.rectangle(
             [(0, 305), (340, 323)],
             fill=(level_fill[0], level_fill[1], level_fill[2], 245),
-        )  # level box
+        )  # Exp already gathered on exp bar
         draw.rectangle(
             [(0, 305), (bar_length, 323)],
             fill=(exp_fill[0], exp_fill[1], exp_fill[2], 255),
-        )  # box
-        exp_text = f"{exp_frac}/{next_level_exp}"  # Exp
+        )  # Exp remaining for next level on exp bar
+        exp_text = f"{exp_frac}/{next_level_exp}"
         draw.text(
             (self._center(0, 340, exp_text, exp_fnt), 305),
             exp_text,
             font=exp_fnt,
             fill=exp_font_color,
-        )  # Exp Text
+        )  # Numbers for exp bar
 
         credit_txt = f"{self._humanize_number(bank_credits)}"
         draw.text(
@@ -683,7 +718,7 @@ class ImageGenerators(MixinMeta):
             credit_txt,
             font=large_fnt,
             fill=info_text_color,
-        )  # Credits
+        )  # Credit numbers
 
         if not userinfo["title"]:
             offset = 170
@@ -694,7 +729,7 @@ class ImageGenerators(MixinMeta):
         for line in textwrap.wrap(userinfo["info"], width=27):
             # for line in textwrap.wrap('userinfo["info"]', width=200):
             # draw.text((margin, offset), line, font=text_fnt, fill=white_color)
-            _write_unicode(line, margin, offset, text_fnt, text_u_fnt, txt_color)
+            _write_unicode(line, "info", margin, offset, text_fnt, text_u_fnt, txt_color)
             offset += 18
 
         # if await self.config.badge_type() == "circles":
